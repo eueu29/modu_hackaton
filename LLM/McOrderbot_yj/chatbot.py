@@ -157,3 +157,4 @@ else:
         st.session_state["messages"].append({"message": "주문을 도와드리겠습니다. 말씀해주세요.", "role": "ai"})
         st.session_state["first_encounter"] = False  # 첫 만남 플래그 해제
     paint_history()
+
