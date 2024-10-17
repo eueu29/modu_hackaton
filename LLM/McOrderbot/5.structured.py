@@ -21,13 +21,30 @@ from langchain_openai import ChatOpenAI
 from langchain.schema import BaseOutputParser
 import json
 import re
+from dotenv import load_dotenv
+from langchain_teddynote import logging
+load_dotenv()
+logging.langsmith("Module")
 
 # 모델 정의
 gpt4o = ChatOpenAI(model_name="gpt-4o-mini-2024-07-18", temperature=0.3)
 claude = ChatAnthropic(model_name="claude-3-5-sonnet-20240620")
 
 # 데이터 로드
-data = json.load(open('/home/yoojin/ML/aiffel/HackaThon/modu_hackaton/LLM/files/menu_1017.json', 'r', encoding='utf-8'))
+file_dir = '/home/yoojin/ML/aiffel/HackaThon/modu_hackaton/LLM/files/menu_1017.json'
+data = json.load(open(file_dir, 'r', encoding='utf-8'))
+
+# 메뉴 로드 클래스
+class LoadMenu:
+    def __init__(self):
+        self.menu_list = []
+        self.data = data
+
+    def get_list(self):
+        for item in self.data:
+            menu_name = item['page_content']['name']
+            self.menu_list.append(menu_name)
+        return self.menu_list
 
 # 장바구니 클래스
 class ShoppingCart:
@@ -99,47 +116,42 @@ class NameChain:
     def __init__(self, model):
         self.model = model
         self.parser = CustomOutputParser()
-
-    def invoke(self, question):
-        chain = PromptTemplate.from_template("""
+        self.menu_list = LoadMenu().get_list()
+        self.name_chain = self.create_name_chain()
+        
+    def create_name_chain(self):
+        name_template = PromptTemplate.from_template("""
             사용자의 질문과 메뉴 리스트를 비교하여 사용자의 질문과 비슷한 메뉴가 있는지 확인하세요.
             비슷한 이름의 메뉴가 있다면 비슷한 메뉴를 모두 출력하세요
             비슷한 메뉴가 없다면 "없음"이라고 출력하세요.
             출력 시 메뉴 이름만 출력하세요
 
             <메뉴 리스트>
-            ['맥크리스피 스리라차 마요', '베토디 스리라차 마요', '더블 쿼터파운더 치즈', '쿼터파운더 치즈', '맥스파이시 상하이 버거', '토마토 치즈 비프 버거', '맥크리스피 디럭스 버거', '맥크리스피 클래식 버거', '빅맥', '트리플 치즈버거', '1955 버거', '맥치킨 모짜렐라', '맥치킨', '더블 불고기 버거', '불고기 버거', '슈슈 버거', '슈비 버거', '베이컨 토마토 디럭스', '치즈버거', '더블 치즈버거', '햄버거', '소시지 스낵랩', '맥윙 2조각', '맥윙 4조각', '맥윙 8조각', '상하이 치킨 스낵랩', '골든 모짜렐라 치즈스틱 4조각', '골든 모짜렐라 치즈스틱 2조각', '맥너겟 6조각', '맥너겟 4조각', '맥스파이시 치킨텐더 2조각', '후렌치 후라이', '스위트 앤 사워 소스', '스위트 칠리 소스', '케이준 소스', '그리머스 쉐이크', '자두 천도복숭아 칠러', '제주 한라봉 칠러', '코카콜라', '코카콜라 제로', '스프라이트', '환타', '바닐라 라떼', '카페라떼', '카푸치노', '아메리카노', '드립 커피', '아이스 바닐라 라떼', '아이스 카페라떼', '아이스 아메리카노', '아이스 드립 커피', '디카페인 바닐라 라떼', '디카페인 카페라떼', '디카페인 카푸치노', '디카페인 아메리카노', '디카페인 아이스 바닐라 라떼', '디카페인 아이스 카페라떼', '디카페인 아이스 아메리카노', '바닐라 쉐이크', '딸기 쉐이크', '초코 쉐이크', '생수', '애플 파이', '오레오 맥플러리', '베리 스트로베리 맥플러리']
+            {menu_list}
             </메뉴 리스트>
 
             <질문>
             {question}
             </질문>
 
-            """) | self.model | self.parser
-        return chain.invoke(question)
-    
-# 메뉴 리스트 로드 클래스
-class LoadMenu:
-    def __init__(self):
-        self.menu_list = []
-        self.data = data
+            """)
+        
+        name_chain = RunnableLambda(lambda inputs: {"menu_list": self.menu_list, "question": inputs}) | name_template | self.model
+        return name_chain
 
-    def get_list(self):
-        for item in self.data:
-            menu_name = item['page_content']['name']
-            self.menu_list.append(menu_name)
-        return self.menu_list
+    def invoke(self, question):
+        return self.name_chain.invoke(question)
 
-# 빠른 주문 모듈 클래스
+# 빠른 주문 모듈 클래스 추가
 class FastOrderModule:
-    def __init__(self, model):
+    def __init__(self, model, name_chain, shopping_cart, recommend_module):
         self.intent_chain = IntentChain(model)
-        self.name_chain = NameChain(model)
-        self.menu_list = LoadMenu().get_list()
+        self.name_chain = name_chain
+        self.shopping_cart = shopping_cart
+        self.recommend_module = recommend_module
         self.menu_data = []
         self.unrecognized_keywords = []
         self.recommend = False
-        self.shopping_cart = ShoppingCart()
 
     def save_menu(self, keyword):
         for item in data:
@@ -159,7 +171,7 @@ class FastOrderModule:
                 }
         return None
 
-    def fast_order(self, question):
+    def invoke(self, question):
         intent_result = self.intent_chain.invoke(question)
         category = intent_result.get('분류')
         intent_keyword = intent_result.get('키워드')
@@ -172,7 +184,6 @@ class FastOrderModule:
                     menu_data_json = self.save_menu(keyword)
                     
                     if menu_data_json is None:
-                        # 이름 추측 체인을 사용해 비슷한 메뉴 찾기
                         similar_menu = self.name_chain.invoke(keyword)["answer"]
                         print(f"similar_menu: {similar_menu}")
                         
@@ -188,7 +199,6 @@ class FastOrderModule:
                         self.menu_data.append(menu_data_json)
 
                 for order_data in self.menu_data:
-                    ###### 수량.... 얘도 LLM 연결해서 숫자만 추출해야할것같은데...
                     num = int(input(f"{order_data['name']} 메뉴가 맞으신가요? 수량은 몇 개 드릴까요? "))
                     self.shopping_cart.add_to_cart(order_data, num)
 
@@ -197,11 +207,173 @@ class FastOrderModule:
                     self.recommend = True
                 print(f"shopping_cart: {self.shopping_cart.cart}")
             else:
-                print("주문 키워드가 없습니다. 다시 시도해 주세요.")
+                print("주문 키워드가 없습니다. 추천시스템으로 연결해드리겠습니다.")
+                self.recommend = True
         else:
             print("추천시스템으로 연결해드리겠습니다.")
+            self.recommend = True
+            
+        if self.recommend == True or category == '추천':
+            return False  # 추천 시스템으로 넘어가도록 표시
+        else:
+            return True  # 빠른 주문 처리 완료
+
+# 추천 모듈 클래스
+class RecommendModule:
+    def __init__(self, model):
+        self.model = model
+        self.recommend_chain = self.create_recommend_chain()
+        self.memory = self.get_memory()
+
+    def create_recommend_chain(self):
+        docs = [
+            Document(
+                page_content=json.dumps(obj['page_content'], ensure_ascii=False),
+            )
+            for obj in json.load(open(file_dir, 'r', encoding='utf-8'))
+        ]
+        text_splitter = CharacterTextSplitter(separator="\n\n", chunk_size=100, chunk_overlap=0)
+        split_docs = text_splitter.split_documents(docs)
+
+        embeddings = UpstageEmbeddings(model="solar-embedding-1-large")
+        cache_dir = LocalFileStore(f"./.cache/embeddings/{file_dir.split('/')[-1]}")
+        cached_embedder = CacheBackedEmbeddings.from_bytes_store(
+            underlying_embeddings=embeddings,
+            document_embedding_cache=cache_dir,
+            namespace="solar-embedding-1-large",
+        )
+        vectorstore = FAISS.from_documents(split_docs, cached_embedder)
+        faiss = vectorstore.as_retriever(search_kwargs={"k": 4})
+
+        bm25 = BM25Retriever.from_documents(split_docs)
+        bm25.k = 4
+
+        ensemble_retriever = EnsembleRetriever(
+            retrievers=[bm25, faiss],
+            weights=[0.3, 0.7],
+            search_type="mmr",
+        )
+
+        recommend_template = ChatPromptTemplate.from_messages([
+            ("system",
+            """
+            당신은 맥도날드의 친절한 점원입니다.
+            고객님의 주문을 도와드리세요. 나이와 상관없이 '고객님'이라고만 부르고, 모든 설명은 어린아이도 이해할 수 있게 간단하게 해주세요. 친절하고 상냥하게 존댓말로 응대합니다.
+            대답할 때는 다음 사항을 기억하세요:
+            1. 제공된 정보만으로 답변합니다.
+            2. 질문과 가장 관련성이 높은 정보를 찾아서 답변하세요.
+            3. 메뉴 추천은 4개 이하로 제한하고, 신메뉴를 먼저 추천하세요.
+            4. 항상 대화 기록을 고려해 대답하세요.
+            5. 확실하지 않은 경우 "죄송합니다. 해당 질문에 대한 답을 찾을 수 없습니다."라고 답하세요.
+
+            **주문 조건:**
+            - 메뉴는 세트와 단품으로 구분됩니다.
+            - 세트메뉴는 버거, 사이드, 음료가 포함되며, 미디엄 사이즈가 기본입니다.
+            - 사이즈 업그레이드는 800원 추가 요금이 부과됩니다.
+            - 사이드는 후렌치 후라이 미디엄이 기본이며, 코울슬로로 무료 변경 가능합니다.
+            - 음료는 코카콜라 미디엄이 기본이며, 음료 변경 시 차액이 발생할 수 있습니다.
+            - 세트메뉴 가격은 'set_burger_price'에 5600원을 더한 금액입니다.
+            - 단품 후렌치 후라이는 스몰(2300원), 미디엄(3000원), 라지(4000원) 중 선택할 수 있습니다.
+            - 단품 음료는 미디엄(2600원) 또는 라지(3100원)입니다.
+            
+            **주문 절차:**
+            - 먼저 고객의 주문을 받고 메뉴가 완성되면 추가 주문 또는 결제여부를 물어보세요.
+            - 메뉴의 주문이 완성되지 않은 경우 추가 주문 또는 결제여부를 묻지 마세요.
+            - 주문이 모두 완료되면 최종 주문 결과를 출력하세요.
+            
+            **주문 결과 출력:**
+            - 세트와 단품 메뉴를 각각 리스트로 구분해 JSON 형식으로 출력합니다.
+            
+            **주문 결과 예시:**
+            [
+                [
+                    {{'name': '불고기 버거', 'num': '1', 'price': '4200', 'set_menu': True, 'set_burger_price': '4000'}},
+                    {{'name': '후렌치 후라이', 'num': '1', 'price': '3000'}},
+                    {{'name': '코카콜라', 'num': '1', 'price': '2600'}}
+                ],
+                [
+                    {{'name': '상하이 치킨 스낵랩', 'num': '1', 'price': '4000'}}
+                ]
+            ]
+            **Context:** {context}
+            **Chat History:** {chat_history}
+            """),
+            ("human", "{question}"),
+        ])
+
+        recommend_chain = {
+            "context": ensemble_retriever,
+            "chat_history": RunnableLambda(lambda _: self.memory.load_memory_variables({})["chat_history"]),
+            "question": RunnablePassthrough()
+        } | recommend_template | self.model
+
+        return recommend_chain
+
+    def invoke(self, question):
+        return self.recommend_chain.invoke(question)
+    
+    def get_memory(self):
+        return ConversationBufferMemory(
+            return_messages=True,
+            memory_key="chat_history"
+        )
+
+
+
+# 주문 모듈 클래스
+class OrderModule:
+    def __init__(self, model):
+        self.name_chain = NameChain(model)
+        self.recommend_module = RecommendModule(claude)  # 추천 모듈은 claude 모델 고정
+        self.shopping_cart = ShoppingCart()
+        self.fast_order_module = FastOrderModule(model, self.name_chain, self.shopping_cart, self.recommend_module)
+        self.messages = []
+        self.memory = self.recommend_module.get_memory()
+        
+    def save_context(self, user_message, ai_message):
+        self.memory.save_context({"input": str(user_message)}, {"output": str(ai_message)})
+        
+    def save_message(self, message, role):
+        self.messages.append({"message": message, "role": role})
+
+    def execute_order(self):
+        self.recommend_module.memory.clear()
+
+        while True:
+            # 사용자로부터 입력 받기
+            user_message = input("질문을 입력해주세요: ").strip()
+            print(f"type: {type(user_message)}")
+
+            # 입력이 비어있는 경우 반복문을 계속 진행
+            if not user_message:
+                continue
+            
+            self.save_message(user_message, "user")
+            
+            # 빠른 주문 시도
+            fast_order_result = self.fast_order_module.invoke(user_message)
+            
+            # 빠른 주문이 실패했거나 추천이 필요한 경우
+            if not fast_order_result:
+                response = self.recommend_module.recommend_chain.invoke(user_message)
+                ai_response = response.content if hasattr(response, 'content') else response
+                self.save_message(ai_response, "assistant")
+                print(f"AI : {ai_response}")
+                print(f"type: {type(ai_response)}")
+                self.save_context({"input": user_message}, {"output": ai_response})
+
+                # 주문 결과가 json 형식인지 확인하여 while문 종료
+                try:
+                    # 문자열을 JSON으로 변환 시도
+                    parsed_response = json.loads(ai_response)
+                    print(f"parsed_response: {parsed_response}")
+                    # JSON 변환이 성공하면 프로그램 종료
+                    print("주문이 완료되었습니다. 프로그램을 종료합니다.")
+                    break
+                except json.JSONDecodeError:
+                    # JSON 변환 실패 시, 반복 계속
+                    pass
 
 # 빠른 주문 실행
-fast_order_module = FastOrderModule(gpt4o)
-question = input("무엇을 주문하시겠습니까? ")
-fast_order_module.fast_order(question)
+order_module = OrderModule(gpt4o)
+order_module.execute_order()
