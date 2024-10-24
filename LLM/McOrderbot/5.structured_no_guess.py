@@ -1,25 +1,26 @@
 import pandas as pd
-import json
-import re
 from langchain.text_splitter import CharacterTextSplitter
 from langchain.retrievers import EnsembleRetriever
 from langchain_community.retrievers import BM25Retriever
 from langchain.embeddings import CacheBackedEmbeddings
 from langchain.storage import LocalFileStore
 from langchain_community.vectorstores import FAISS
-from langchain_upstage import UpstageEmbeddings
+from langchain_upstage import UpstageEmbeddings, ChatUpstage
 from langchain_anthropic import ChatAnthropic
 from langchain.prompts import ChatPromptTemplate
 from langchain.schema.runnable import RunnablePassthrough, RunnableLambda 
 from langchain.memory import ConversationBufferMemory
-from langchain.memory import ConversationBufferWindowMemory
 from langchain.schema import Document
+from langchain_community.document_loaders import JSONLoader
+from langchain.chains.query_constructor.base import AttributeInfo
 from langchain.prompts import PromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langchain_anthropic import ChatAnthropic
 from langchain.schema.output_parser import StrOutputParser
 from langchain_openai import ChatOpenAI
 from langchain.schema import BaseOutputParser
+import json
+import re
 from dotenv import load_dotenv
 from langchain_teddynote import logging
 
@@ -49,10 +50,10 @@ class LoadMenu:
 
 # 장바구니 클래스
 class ShoppingCart:
-    cart = []
+    def __init__(self):
+        self.cart = []
 
-    @classmethod
-    def add_to_cart(cls, order_data, num):
+    def add_to_cart(self, order_data, num):
         mini_cart = []
         cart_item = {
             "name": order_data["name"],
@@ -63,16 +64,12 @@ class ShoppingCart:
         if order_data["set_menu"]:
             cart_item["set_price"] = order_data["set_price"]  # 나중에 set_price로 변경 예정
         mini_cart.append(cart_item)
-        cls.cart.append(mini_cart)
-        return cls.cart
-    
-    @classmethod
-    def add_rec_menu_to_cart(cls, data):
-        cls.cart += data
+        self.cart.append(mini_cart)
+        return self.cart
 
 class IntentChain:
-    def __init__(self):
-        self.model = gpt4o_mini
+    def __init__(self, model):
+        self.model = model
 
     def parse_response(self, response_str):
         try:
@@ -153,9 +150,10 @@ class NameChain:
 
 # 빠른 주문 모듈 클래스 추가
 class FastOrderModule:
-    def __init__(self, model, intent_chain, name_chain):
+    def __init__(self, model, intent_chain, name_chain, shopping_cart):
         self.intent_chain = intent_chain
         self.name_chain = name_chain
+        self.shopping_cart = shopping_cart
         self.menu_data = []
         self.recommend = False
         self.model = model
@@ -178,38 +176,6 @@ class FastOrderModule:
                 }
         return None
 
-    def create_order_prompt(self, menu_data_json):
-        order_prompt_template = PromptTemplate.from_template("""
-        사용자가 주문한 메뉴명이 맞는지 확인하고, 수량 및 세트여부와 세트구성을 확인하세요.
-        최종적으로 주문하는 모든 메뉴의 메뉴명과 수량을 JSON형식으로 출력하세요.
-
-        세트메뉴의 경우, 사이드와 음료가 모두 주문이 되어야 합니다. 
-        기본 사이드는 미디엄 사이즈 프렌치 프라이, 기본 음료는 미디엄 사이즈 코카콜라 입니다. 
-        사이즈 변경은 라지사이즈로 가능하며, 이 경우 사이드와 음료가 모두 라지사이즈로 주문됩니다.
-
-        <주문 내역>
-        메뉴: {menu_name}
-        수량: {quantity}
-        세트여부: {set_menu}
-        세트구성: {set_details}
-        </주문 내역>
-
-        최종 주문 내역을 JSON 형식으로 출력하세요:
-        {{
-            "menu_name": "{menu_name}",
-            "quantity": {quantity},
-            "set_menu": {set_menu},
-            "set_details": {set_details}
-        }}
-        """)
-        order_chain = RunnableLambda(lambda inputs: {
-            "menu_name": menu_data_json['name'], 
-            "quantity": inputs['quantity'], 
-            "set_menu": inputs['set_menu'], 
-            "set_details": inputs['set_details']
-        }) | order_prompt_template | self.model
-        return order_chain
-
     def invoke(self, category, intent_keyword):
         if category == '주문':
             if intent_keyword:
@@ -223,21 +189,17 @@ class FastOrderModule:
                             menu_data_json = self.save_menu(similar_menu)
 
                     if menu_data_json is None:
+                        #굳이 키워드 저장할 필요 없이 바로 추천시스템으로 넘어가도 될지도..?
                         self.recommend = True
                     else:
                         if "세트" in keyword:
                             menu_data_json['set_menu'] = True
                         self.menu_data.append(menu_data_json)
 
-                        # 주문을 완성하는 prompt를 langchain으로 구현
-                        order_chain = self.create_order_prompt(menu_data_json)
-                        order_prompt_result = order_chain.invoke({
-                            "quantity": input(f"{menu_data_json['name']} 메뉴가 맞으신가요? 수량은 몇 개 드릴까요? "),
-                            "set_menu": menu_data_json['set_menu'],
-                            "set_details": "기본 사이드: 미디엄 사이즈 프렌치 프라이, 기본 음료: 미디엄 사이즈 코카콜라"
-                        })
-                        order_data = json.loads(order_prompt_result)
-                        ShoppingCart.add_to_cart(menu_data_json, order_data['quantity'])
+                for order_data in self.menu_data:
+                    ## 세트는 한번에 수량확인할 수 있도록 수정하기
+                    num = int(input(f"{order_data['name']} 메뉴가 맞으신가요? 수량은 몇 개 드릴까요? "))
+                    self.shopping_cart.add_to_cart(order_data, num)
 
             else:
                 self.recommend = True
@@ -250,7 +212,7 @@ class FastOrderModule:
                 "메시지": "추천시스템으로 연결해드리겠습니다."
             }
         else:
-            print(ShoppingCart.cart)
+            print(self.shopping_cart.cart)
             return {
                 "return": True,  # 추천 시스템으로 넘어가도록 표시
                 "메시지": "주문이 완료되었습니다."
@@ -258,41 +220,11 @@ class FastOrderModule:
 
 # 추천 모듈 클래스
 class RecommendModule:
-    def __init__(self, model, shared_memory, shared_window_memory):
+    def __init__(self, model, shared_memory):
         self.model = model
         self.recommend_chain = self.create_recommend_chain()
-        self.menu = self.guess_menu()
         self.memory = shared_memory  # 공유 메모리 사용
-        self.window_memory = shared_window_memory
-    
-    def guess_menu(self):
-        guess_template = ChatPromptTemplate.from_messages([
-        ("system", 
-        """
-        이전 대화 내역을 참고하여 사용자가 언급한 메뉴를 검색할 수 있도록 필요한 정보를 추출하세요. 
-        사용자가 비교를 요청하거나 추가적인 정보를 요구하는 메뉴 이름을 찾아 "검색_내용" 항목에 포함시키세요.
-        검색이 필요한 항목 외에는 "검색_내용"에 포함시키지 마세요.
 
-        이전 대화 내역:
-        {chat_history}
-
-        출력 형식:
-        {{
-            "검색_내용": [검색이 필요한 메뉴들]
-        }}
-
-        반드시 위의 출력 형식에 맞춰 JSON 형태로 응답해주세요. 마크다운 표시는 하지 마세요.
-        """),
-        ("human", "{question}"),
-    ]) 
-
-        guess_chain = {
-            "chat_history": RunnableLambda(lambda _: self.memory.load_memory_variables({})["chat_history"]),
-            "question": RunnablePassthrough()
-        } | guess_template | gpt4o_mini | StrOutputParser()
-        
-        return guess_chain
-    
     def create_recommend_chain(self):
         docs = [
             Document(
@@ -314,7 +246,7 @@ class RecommendModule:
         faiss = vectorstore.as_retriever(search_kwargs={"k": 4})
 
         bm25 = BM25Retriever.from_documents(split_docs)
-        bm25.k = 2
+        bm25.k = 4
 
         ensemble_retriever = EnsembleRetriever(
             retrievers=[bm25, faiss],
@@ -333,7 +265,8 @@ class RecommendModule:
             1. 제공된 정보만으로 답변합니다.
             2. 질문과 가장 관련성이 높은 정보를 선택해 대답하세요.
             3. 메뉴 추천은 2개 이하로 제한하며, 신메뉴를 우선 추천하세요.
-            4. 확실하지 않으면 "정확한 답변을 드리기 어렵습니다만, 추가로 확인 후 도와드리겠습니다."라고 답하세요.
+            4. 항상 대화 기록을 최우선으로 고려해 대답하세요.
+            5. 확실하지 않으면 "정확한 답변을 드리기 어렵습니다만, 추가로 확인 후 도와드리겠습니다."라고 답하세요.
 
             **주문 조건:**
             - 메뉴는 세트와 단품으로 구분됩니다.
@@ -349,9 +282,8 @@ class RecommendModule:
             - 주문이 완료되면, 주문이 완료되었음을 표시합니다.
             
             **주문 결과 출력:**
-            - 모든 LLM 응답을 반드시'주문 결과 예시'의 JSON형식으로 출력됩니다.
-            - 마크다운 표시는 하지 마세요.
-            
+            - 모든 LLM 응답은 '주문 결과 예시'의 형식으로 출력됩니다.
+            - '주문완료', 'LLM 응답', '주문내역'을 JSON 형식으로 출력하세요.
 
             **주문 결과 예시:**
             {{
@@ -379,27 +311,25 @@ class RecommendModule:
 
         recommend_chain = {
             "context": ensemble_retriever,
-            "chat_history": RunnableLambda(lambda _: self.window_memory.load_memory_variables({})["history"]),
+            "chat_history": RunnableLambda(lambda _: self.memory.load_memory_variables({})["chat_history"]),
             "question": RunnablePassthrough()
         } | recommend_template | self.model
         return recommend_chain
 
     def invoke(self, question):
-        result = self.menu.invoke(question)
-        query = json.loads(result)
-        str_result = f"질문:{question}, 검색 내용: {', '.join(query['검색_내용'])}"
-        print(str_result)
-        return self.recommend_chain.invoke(str_result)
+        return self.recommend_chain.invoke(question)
+
+
 
 # 주문 모듈 클래스
 class OrderModule: 
     def __init__(self, model):
         self.memory = self.get_shared_memory()  # 공유 메모리 생성
-        self.window_memory = self.get_shared_window_memory()
-        self.intent_chain = IntentChain()
+        self.intent_chain = IntentChain(model)
         self.name_chain = NameChain(model)
-        self.recommend_module = RecommendModule(model, self.memory, self.window_memory)  # 공유 메모리 전달
-        self.fast_order_module = FastOrderModule(model, self.intent_chain, self.name_chain)
+        self.recommend_module = RecommendModule(claude, self.memory)  # 공유 메모리 전달
+        self.shopping_cart = ShoppingCart()
+        self.fast_order_module = FastOrderModule(model, self.intent_chain, self.name_chain, self.shopping_cart)
         self.messages = []
 
     def get_shared_memory(self):
@@ -407,15 +337,9 @@ class OrderModule:
             return_messages=True,
             memory_key="chat_history"
         )
-    def get_shared_window_memory(self):
-        return  ConversationBufferWindowMemory(
-            k=2, 
-            return_messages=True
-        )
         
     def save_context(self, user_message, ai_message):
         self.memory.save_context({"input": str(user_message)}, {"output": str(ai_message)})
-        self.window_memory.save_context({"input": str(user_message)}, {"output": str(ai_message)})
 
     def save_message(self, message, role):
         self.messages.append({"message": message, "role": role})
@@ -465,7 +389,7 @@ class OrderModule:
                 print("추천주문모듈을 진행합니다.")
                 # JSON 주문 결과가 나올 때까지 추천주문 모듈 내에서만 대화 진행
                 while True:
-                    response = self.recommend_module.invoke(user_message)
+                    response = self.recommend_module.recommend_chain.invoke(user_message)
                     # JSON 데이터만 추출
                     ai_response = response.content if hasattr(response, 'content') else response
                     extracted_json = self.extract_json_data(ai_response)
@@ -476,21 +400,18 @@ class OrderModule:
                     print(f"AI : {ai_reply}")
 
                     if extracted_json['completion']:
+                        print("주문이 완료되었습니다. 프로그램을 종료합니다.")
                         rec_order = extracted_json['order']
                         print(f"order_data: {rec_order}")
-                        ShoppingCart.add_rec_menu_to_cart(rec_order)
-                        print(ShoppingCart.cart)
+                        self.shopping_cart.cart.append(rec_order)
+                        print(self.shopping_cart.cart)
                         break
                     else:
                         user_message = input("입력:").strip()
-                if extracted_json['completion']:
-                    print("주문이 완료되었습니다. 프로그램을 종료합니다.")
-                    break
             else:
                 print({"전송": True, "메시지": "주문이 완료되었습니다."})
-                # print(f"shopping_cart: {ShoppingCart.cart}")
+                # print(f"shopping_cart: {self.shopping_cart.cart}")
                 # user_message = input("주문 완료하시겠습니까?").strip()
-                break
                 
 # 빠른 주문 실행
 order_module = OrderModule(gpt4o)
