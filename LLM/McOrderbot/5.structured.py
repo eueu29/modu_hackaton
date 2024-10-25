@@ -50,26 +50,36 @@ class LoadMenu:
 # 장바구니 클래스
 class ShoppingCart:
     cart = []
-
-    @classmethod
-    def add_to_cart(cls, order_data, num):
-        mini_cart = []
-        cart_item = {
-            "name": order_data["name"],
-            "num": num,
-            "price": order_data["price"],
-            "set_menu": order_data["set_menu"]
-        }
-        if order_data["set_menu"]:
-            cart_item["set_price"] = order_data["set_price"]  # 나중에 set_price로 변경 예정
-        mini_cart.append(cart_item)
-        cls.cart.append(mini_cart)
-        return cls.cart
+    
+    # @classmethod
+    # def add_to_cart(cls, order_data, quantity):
+    #     mini_cart = []
+    #     cart_item = {
+    #         "name": order_data["name"],
+    #         "quantity": quantity,
+    #         "price": order_data["price"],
+    #         "set_menu": order_data["set_menu"]
+    #     }
+    #     if order_data["set_menu"]:
+    #         cart_item["set_price"] = order_data["set_price"]  # 나중에 set_price로 변경 예정
+    #     mini_cart.append(cart_item)
+    #     cls.cart.append(mini_cart)
+    #     return cls.cart
     
     @classmethod
     def add_rec_menu_to_cart(cls, data):
         cls.cart += data
 
+    @classmethod
+    def calculate_total(cls):
+        total = 0
+        for order in cls.cart:
+            for item in order:
+                price = item.get('set_price') if item.get('set_menu') else item.get('price')
+                quantity = item.get('num', 1)
+                if price:
+                    total += int(price) * int(quantity)
+        return total
 class IntentChain:
     def __init__(self):
         self.model = gpt4o_mini
@@ -82,7 +92,8 @@ class IntentChain:
         return response_dict
 
     def invoke(self, question):
-        chain = PromptTemplate.from_template("""
+        chain = ChatPromptTemplate.from_messages([
+        ("system", """
         아래 질문을 보고 사용자가 원하는 의도를 '주문', '취소', '결제', '추천'중 하나로 정확하게 분류하세요.
 
         분류 기준:
@@ -90,10 +101,6 @@ class IntentChain:
         - 취소: 이전에 진행된 주문을 취소하려는 경우 (예: '주문 취소해 주세요', '아까 주문한 것 취소하고 싶어요')
         - 결제: 주문 완료 후 결제를 요청하는 경우 (예: '결제할거야', '주문 완료')
         - 추천: 주문, 취소, 결제 이외의 경우
-
-        <질문>
-        {question}
-        </질문>
 
         질문의 분류와 해당 질문에 포함된 주요 키워드를 JSON 형식으로 출력하세요.
 
@@ -105,9 +112,12 @@ class IntentChain:
 
         예시 출력: {{"분류": "주문", "키워드": ["불고기 버거 세트", "후렌치후라이", "콜라", "상하이 치킨 스낵랩"]}}
         예시 출력: {{"분류": "추천"}}
-        """) | self.model | StrOutputParser()
+        """),
+        ("ai","무엇을 도와드릴까요?"),
+        ("human", "{input}")
+        ])  | self.model | StrOutputParser()
 
-        intent_result = chain.invoke(question)
+        intent_result = chain.invoke({"input" :question})
         intent = self.parse_response(intent_result)
         print(f"intent:{intent}")
         category = intent['분류']
@@ -159,6 +169,7 @@ class FastOrderModule:
         self.menu_data = []
         self.recommend = False
         self.model = model
+        self.confirm_menu = self.create_order_prompt()
 
     def save_menu(self, keyword):
         for item in data:
@@ -171,90 +182,112 @@ class FastOrderModule:
                     "product_status": item['page_content']['product_status'],
                     "description": item['page_content']['description'],
                     "price": item['page_content']['price'],
-                    "set_price": item['page_content']['set_price'],
                     "nutrition": item['page_content']['nutrition'],
-                    "origin_info": item['page_content']['origin_info'],
+                    "ingredients":item['page_content']['ingredients'],
+                    "allergy_caution": item['page_content']['allergy_caution'],
                     "set_menu": False
                 }
         return None
+    
+    def create_order_prompt(self):
+        order_prompt_template = ChatPromptTemplate.from_messages([
+        ("system", """
+        메뉴목록에 있는 모든 메뉴에 대하여 메뉴명과 수량, 세트 여부, 세트 구성을 정확히 확인하세요.
+        세트 메뉴일 경우 사이드와 음료 구성이 완전한지 확인하고, 부족할 경우 기본 구성을 안내하세요.
+        기본 사이드는 미디엄 사이즈 프렌치 프라이, 기본 음료는 미디엄 사이즈 코카콜라입니다.
+        사이드는 무료로 코울슬로로 변경할 수 있으며, 음료는 음료 카테고리에서 변경 가능하나 추가 요금이 발생할 수 있습니다.
+        사이즈는 라지로 변경할 수 있으며, 이 경우 사이드와 음료도 모두 라지 사이즈로 변경됩니다.
+        
+        **주문 결과 출력:**
+        - 모든 LLM 응답은 '주문 결과 예시'의 형식으로 출력됩니다.
+        - '주문완료', 'LLM 응답', '주문내역'을 JSON 형식으로 출력하세요.
 
-    def create_order_prompt(self, menu_data_json):
-        order_prompt_template = PromptTemplate.from_template("""
-        사용자가 주문한 메뉴명이 맞는지 확인하고, 수량 및 세트여부와 세트구성을 확인하세요.
-        최종적으로 주문하는 모든 메뉴의 메뉴명과 수량을 JSON형식으로 출력하세요.
-
-        세트메뉴의 경우, 사이드와 음료가 모두 주문이 되어야 합니다. 
-        기본 사이드는 미디엄 사이즈 프렌치 프라이, 기본 음료는 미디엄 사이즈 코카콜라 입니다. 
-        사이즈 변경은 라지사이즈로 가능하며, 이 경우 사이드와 음료가 모두 라지사이즈로 주문됩니다.
-
-        <주문 내역>
-        메뉴: {menu_name}
-        수량: {quantity}
-        세트여부: {set_menu}
-        세트구성: {set_details}
-        </주문 내역>
-
-        최종 주문 내역을 JSON 형식으로 출력하세요:
+        **주문 결과 예시:**
         {{
-            "menu_name": "{menu_name}",
-            "quantity": {quantity},
-            "set_menu": {set_menu},
-            "set_details": {set_details}
+            "completion": {{order_complete}},
+            "reply" : "{{llm_response}}",
+            "order" : 
+            [
+                [
+                    {{"name": "불고기 버거", "num": "1", "price": "4200", "set_menu": True, "set_price": "4000"}},
+                    {{"name": "후렌치후라이", "set_menu": True}},
+                    {{"name": "코카콜라", "set_menu": True}}
+                ],
+                [
+                    {{"name": "상하이 치킨 스낵랩", "num": "1", "price": "4000", "set_menu": False}},
+                    {{"name": "아이스 드립 커피", "num": "1", "price": "2700", "set_menu":  False}}
+                ]
+            ]
         }}
-        """)
-        order_chain = RunnableLambda(lambda inputs: {
-            "menu_name": menu_data_json['name'], 
-            "quantity": inputs['quantity'], 
-            "set_menu": inputs['set_menu'], 
-            "set_details": inputs['set_details']
-        }) | order_prompt_template | self.model
+        
+        **메뉴목록**: {context}
+        **사용자 주문** : {order}
+        """),
+        ("ai","주문 확인을 도와드리겠습니다."),
+        ("human", "{question}")
+        ])
+        
+        order_chain = {
+            "context": RunnableLambda(lambda _: self.menu_data),
+            "order": RunnablePassthrough(),
+            "question": RunnablePassthrough()
+        } | order_prompt_template | self.model
         return order_chain
 
-    def invoke(self, category, intent_keyword):
-        if category == '주문':
-            if intent_keyword:
-                for keyword in intent_keyword: 
-                    menu_data_json = self.save_menu(keyword)
+    def invoke(self, user_message, category, intent_keyword):
+        # if category == '주문':
+        #     if intent_keyword:
+        #         for keyword in intent_keyword: 
+        #             menu_data_json = self.save_menu(keyword)
+        #             print("메뉴가 존재합니다")
                     
-                    if menu_data_json is None:
-                        similar_menu = self.name_chain.invoke(keyword)["answer"]
+        #             if menu_data_json is None:
+        #                 similar_menu = self.name_chain.invoke(keyword)["answer"]
                         
-                        if similar_menu != "없음":
-                            menu_data_json = self.save_menu(similar_menu)
+        #                 if similar_menu != "없음":
+        #                     menu_data_json = self.save_menu(similar_menu)
+        #                     print("비슷한 이름의 메뉴가 존재합니다")
 
-                    if menu_data_json is None:
-                        self.recommend = True
-                    else:
-                        if "세트" in keyword:
-                            menu_data_json['set_menu'] = True
-                        self.menu_data.append(menu_data_json)
-
-                        # 주문을 완성하는 prompt를 langchain으로 구현
-                        order_chain = self.create_order_prompt(menu_data_json)
-                        order_prompt_result = order_chain.invoke({
-                            "quantity": input(f"{menu_data_json['name']} 메뉴가 맞으신가요? 수량은 몇 개 드릴까요? "),
-                            "set_menu": menu_data_json['set_menu'],
-                            "set_details": "기본 사이드: 미디엄 사이즈 프렌치 프라이, 기본 음료: 미디엄 사이즈 코카콜라"
-                        })
-                        order_data = json.loads(order_prompt_result)
-                        ShoppingCart.add_to_cart(menu_data_json, order_data['quantity'])
-
-            else:
-                self.recommend = True
-        else: 
-            self.recommend = True
+        #             if menu_data_json is None:
+        #                 self.recommend = True
+        #             else:
+        #                 if "세트" in keyword:
+        #                     menu_data_json['set_menu'] = True
+        #                 self.menu_data.append(menu_data_json)
+        #                 print("1")
+        #     else:
+        #         self.recommend = True
+        #         print("2")
+        # else: 
+        #     self.recommend = True
+        #     print("3")
+        
+        # if self.menu_data:
+        #     print("4")
+        #     while True:
+        #         confirm = self.confirm_menu.invoke({"order": user_message})
+        #         ShoppingCart.add_rec_menu_to_cart(confirm)
+        #         print("5")
             
-        if self.recommend == True or category == '추천':
-            return {
-                "return": False,  # 추천 시스템으로 넘어가도록 표시
-                "메시지": "추천시스템으로 연결해드리겠습니다."
-            }
-        else:
-            print(ShoppingCart.cart)
-            return {
-                "return": True,  # 추천 시스템으로 넘어가도록 표시
-                "메시지": "주문이 완료되었습니다."
-            }  # 빠른 주문 처리 완료
+
+        # if self.recommend == True or category != '주문':
+        #     print("6")
+        #     return {
+        #         "return": False,  # 추천 시스템으로 넘어가도록 표시
+        #         "메시지": "상담시스템으로 연결해드리겠습니다."
+        #     }
+        # else:
+        #     print("7")
+        #     return {
+        #         "return": True,  # 추천 시스템으로 넘어가도록 표시
+        #         "메시지": "주문이 완료되었습니다."
+        #     }  # 빠른 주문 처리 완료
+
+        return {
+            "return": False,  # 추천 시스템으로 넘어가도록 표시
+            "메시지": "상담시스템으로 연결해드리겠습니다."
+        }
+
 
 # 추천 모듈 클래스
 class RecommendModule:
@@ -271,14 +304,15 @@ class RecommendModule:
         """
         이전 대화 내역을 참고하여 사용자가 언급한 메뉴를 검색할 수 있도록 필요한 정보를 추출하세요. 
         사용자가 비교를 요청하거나 추가적인 정보를 요구하는 메뉴 이름을 찾아 "검색_내용" 항목에 포함시키세요.
-        검색이 필요한 항목 외에는 "검색_내용"에 포함시키지 마세요.
+        사용자가 주문한다고 언급한 모든 메뉴 항목을 반드시 "검색_내용"에 포함시키세요.
+        검색이 필요한 항목과 주문 내역 외에는 "검색_내용"에 포함시키지 마세요.
 
         이전 대화 내역:
         {chat_history}
 
         출력 형식:
         {{
-            "검색_내용": [검색이 필요한 메뉴들]
+            "검색_내용": [검색이 필요한 메뉴들, 주문한 메뉴들]
         }}
 
         반드시 위의 출력 형식에 맞춰 JSON 형태로 응답해주세요. 마크다운 표시는 하지 마세요.
@@ -344,12 +378,11 @@ class RecommendModule:
             - 음료는 코카콜라 미디엄이 기본이며, 음료 변경 시 차액이 발생할 수 있습니다.
 
             **주문 절차:**
-            - 고객님의 주문을 받고 메뉴가 완성되면 추가 주문 여부를 물어보세요.
-            - 주문이 미완료된 경우 추가 주문을 묻지 마세요.
-            - 주문이 완료되면, 주문이 완료되었음을 표시합니다.
+            - 주문이 완료되면 "추가로 원하시는 메뉴가 있으신가요? 결제를 원하시면 '결제할게'라고 말씀해 주세요."라고 안내하세요.
+            - 결제 요청이 있으면 주문이 완료되었음을 표시합니다.
             
             **주문 결과 출력:**
-            - 모든 LLM 응답을 반드시'주문 결과 예시'의 JSON형식으로 출력됩니다.
+            - 모든 LLM 응답을 반드시 '주문 결과 예시'의 JSON 형식으로 출력합니다.
             - 마크다운 표시는 하지 마세요.
             
 
@@ -360,13 +393,13 @@ class RecommendModule:
                 "order" : 
                 [
                     [
-                        {{"name": "불고기 버거", "num": "1", "price": "4200", "set_menu": True, "set_price": "4000"}},
+                        {{"name": "불고기 버거", "quantity": "1", "price": "4200", "set_menu": True, "set_price": "4000"}},
                         {{"name": "후렌치후라이", "set_menu": True}},
                         {{"name": "코카콜라", "set_menu": True}},
                     ],
                     [
-                        {{"name": "상하이 치킨 스낵랩", "num": "1", "price": "4000", "set_menu": False}}
-                        {{"name : "아이스 드립 커피", "num": "1", "price": "2700", "set_menu":  False}}
+                        {{"name": "상하이 치킨 스낵랩", "quantity": "1", "price": "4000", "set_menu": False}}
+                        {{"name : "오레오 맥플러리", "quantity": "1", "price": "4300", "set_menu":  False}}
                     ]
                 ]
             }}
@@ -436,62 +469,74 @@ class OrderModule:
             return None
         
     def execute_order(self):
-        self.recommend_module.memory.clear()
+        try:
+            self.recommend_module.memory.clear()
 
-        while True:
-            # 사용자로부터 입력 받기
-            print("주문을 도와드리겠습니다. 주문하실 메뉴를 말씀해주세요: ")
-            user_message = input("입력: ").strip()
+            while True:
+                ####flutter에서 시작할때 "주문을 도와드리겠습니다. 무엇을 드시겠어요?"라고 출력되게 가능할까요?
+                # 사용자로부터 입력 받기
+                user_message = input("입력: ").strip()
 
-            # 입력이 비어있는 경우 반복문을 계속 진행
-            if not user_message:
-                continue
+                # 입력이 비어있는 경우 반복문을 계속 진행
+                if not user_message:
+                    continue
 
-            self.save_message(user_message, "user")
+                self.save_message(user_message, "user")
 
-            # 의도 분석
-            intent_result = self.intent_chain.invoke(user_message)
-            category, intent_keyword = intent_result
-            print(f"category:{category}")
-            print(f"intent_keyword: {intent_keyword}")
+                # 의도 분석
+                intent_result = self.intent_chain.invoke(user_message)
+                category, intent_keyword = intent_result
+                print(f"category:{category}")
+                print(f"intent_keyword: {intent_keyword}")
 
-            # 빠른 주문 시도
-            fast_order_result = self.fast_order_module.invoke(category, intent_keyword)
-            fast_order_result = fast_order_result['return']
-            print(f'fast_order_result : {fast_order_result}')
+                # 빠른 주문 시도
+                fast_order_result = self.fast_order_module.invoke(user_message,category, intent_keyword)
+                fast_order_result = fast_order_result['return']
+                print(f'fast_order_result : {fast_order_result}')
 
-            # 빠른 주문이 실패했거나 추천이 필요한 경우
-            if not fast_order_result:
-                print("추천주문모듈을 진행합니다.")
-                # JSON 주문 결과가 나올 때까지 추천주문 모듈 내에서만 대화 진행
-                while True:
-                    response = self.recommend_module.invoke(user_message)
-                    # JSON 데이터만 추출
-                    ai_response = response.content if hasattr(response, 'content') else response
-                    extracted_json = self.extract_json_data(ai_response)
-                    ai_reply = extracted_json['reply']  #이 부분이 LLM응답부분
-                    self.save_message(user_message, "user")
-                    self.save_message(ai_reply, "assistant")
-                    self.save_context({"input": user_message}, {"output": ai_reply})
-                    print(f"AI : {ai_reply}")
+                # 빠른 주문이 실패했거나 추천이 필요한 경우
+                if not fast_order_result:
+                    print("추천주문모듈을 진행합니다.")
+                    # JSON 주문 결과가 나올 때까지 추천주문 모듈 내에서만 대화 진행
+                    while True:
+                        response = self.recommend_module.invoke(user_message)
+                        # JSON 데이터만 추출
+                        ai_response = response.content if hasattr(response, 'content') else response
+                        print(f"ai_response : {ai_response}")
+                        extracted_json = self.extract_json_data(ai_response)
+                        print(f"extracted_json :{extracted_json}")
+                        ai_reply = extracted_json['reply']  #이 부분이 LLM응답부분
+                        self.save_message(user_message, "user")
+                        self.save_message(ai_reply, "assistant")
+                        self.save_context({"input": user_message}, {"output": ai_reply})
+                        print(f"AI : {ai_reply}")
 
+                        if extracted_json['completion']:
+                            rec_order = extracted_json['order']
+                            print(f"order_data: {rec_order}")
+                            ShoppingCart.add_rec_menu_to_cart(rec_order)
+                            print(ShoppingCart.cart)
+                            break
+                        else:
+                            user_message = input("입력:").strip()
                     if extracted_json['completion']:
-                        rec_order = extracted_json['order']
-                        print(f"order_data: {rec_order}")
-                        ShoppingCart.add_rec_menu_to_cart(rec_order)
-                        print(ShoppingCart.cart)
+                        total = ShoppingCart.calculate_total()
+                        print({"전송": True, "메시지": f"주문이 완료되었습니다.{total}원 결제 도와드리겠습니다."})
                         break
-                    else:
-                        user_message = input("입력:").strip()
-                if extracted_json['completion']:
-                    print("주문이 완료되었습니다. 프로그램을 종료합니다.")
+                else:
+                    # print({"전송": True, "메시지": f"주문이 완료되었습니다.{total}원 결제를 도와드리겠습니다."})
                     break
-            else:
-                print({"전송": True, "메시지": "주문이 완료되었습니다."})
-                # print(f"shopping_cart: {ShoppingCart.cart}")
-                # user_message = input("주문 완료하시겠습니까?").strip()
-                break
+        except KeyboardInterrupt:
+            print("\n프로그램이 사용자에 의해 종료되었습니다.")
+        finally:
+            print("주문 프로세스를 종료합니다. 감사합니다.")
                 
 # 빠른 주문 실행
-order_module = OrderModule(gpt4o)
-order_module.execute_order()
+order_module = OrderModule(claude)
+
+# 메인 실행 부분
+if __name__ == "__main__":
+    try:
+        order_module.execute_order()
+    except Exception as e:
+        print(f"예상치 못한 오류가 발생했습니다: {e}")
