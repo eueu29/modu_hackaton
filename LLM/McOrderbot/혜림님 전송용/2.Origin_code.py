@@ -132,10 +132,10 @@ class IntentChain:
     def additional_invoke(self, question):
         intent_chain = ChatPromptTemplate.from_messages([
             ("system", """
-            사용자의 질문을 '취소', '결제', '추천' 중 하나로 분류하세요.
+            사용자의 질문을 '종료', '결제', '추천' 중 하나로 분류하세요.
 
             분류 기준:
-            - 취소: 주문을 종료하려는 경우
+            - 종료: 주문을 종료하려는 경우
             - 결제: 주문 완료 후 결제를 요청하는 경우, 요청사항이 없다고 하는 경우 (예: '결제할거야', '주문 완료', '없어')
             - 추천: 취소나 결제가 아닌 기타 문의 (예: '추천 메뉴 있어요?', '가장 인기 있는 메뉴는?','아까 주문한거 취소할래')
 
@@ -452,9 +452,8 @@ class OrderModule:
                 print("결제를 도와드리겠습니다")
                 # 결제 로직 추가 필요
                 return False
-            elif intent == "취소":
-                print("주문을 취소합니다.")
-                # 취소 로직 추가 필요
+            elif intent == "종료":
+                print("주문을 종료합니다. 다음에 또 뵙겠습니다 고객님.")
                 return False
             else:
                 print("죄송합니다. 요청을 이해하지 못했습니다.")
