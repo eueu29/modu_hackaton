@@ -51,7 +51,7 @@ class ShoppingCart:
         total = 0
         for order in cls.cart:
             if order[0]['set_menu']:
-                total += int(order[0]['set_price'])
+                total += int(order[0]['set_price'])* int(order[0]['quantity'])
             else:
                 total += int(order[0]['price']) * int(order[0]['quantity'])
         return total
@@ -181,10 +181,10 @@ class RecommendModule:
             **주문 조건:**
             - 메뉴는 세트와 단품으로 구분됩니다.
             - 세트 메뉴는 기본으로 버거, 사이드, 음료가 포함되며, 미디엄 사이즈가 기본입니다.
-            - 미디엄 사이즈 세트 메뉴 가격은 context의 'set_price' 가격입니다. 해당 정보가 없으면 "죄송합니다, 세트 구성이 불가능한 항목입니다. 대신 단품으로 주문하시거나 다른 메뉴를 선택해 주세요."라고 안내하세요.
+            - 미디엄 사이즈 세트 메뉴 가격은 context의 'set price' 가격입니다. 해당 정보가 없으면 "죄송합니다, 세트 구성이 불가능한 항목입니다. 대신 단품으로 주문하시거나 다른 메뉴를 선택해 주세요."라고 안내하세요.
             - 라지 사이즈 세트 메뉴로의 업그레이드는 800원 추가 요금이 부과됩니다.
             - 사이드는 기본으로 후렌치 후라이 미디엄이며, 코울슬로로만 무료 변경 가능합니다.
-            - 음료는 기본으로 코카콜라 미디엄이며, 음료 변경 시 차액이 발생할 수 있습니다.
+            - 음료는 기본으로 코카콜라 미디엄이며, 음료 변경은 [코카콜라, 코카콜라 제로, 스프라이트, 환타]중에 가능합니다.
 
             **주문 절차:**
             - 메뉴가 결정되면 세트 여부와 수량을 모두 확인한 후에만 주문을 완료하세요.
@@ -293,10 +293,10 @@ class OrderModule:
                 ShoppingCart.print_order()
                 print("결제를 도와드리겠습니다")
                 # 결제 로직 추가 필요
-                return False
+                break
             elif intent == "종료":
                 print("주문을 종료합니다. 다음에 또 뵙겠습니다 고객님.")
-                return False
+                break
             else:
                 print("죄송합니다. 요청을 이해하지 못했습니다.")
     
@@ -339,6 +339,8 @@ class OrderModule:
                 ai_response = response.content if hasattr(response, 'content') else response
                 print(f"ai_response : {ai_response}")
                 extracted_json = self.extract_json_data(ai_response)
+                if extracted_json is None:
+                    extracted_json = {'reply':{ai_response}}
                 print(f"extracted_json :{extracted_json}")
                 ai_reply = extracted_json['reply']
                 self.save_context({"input": user_message}, {"output": ai_reply})
@@ -359,7 +361,7 @@ class OrderModule:
             print(f"추가 주문 처리 중 오류가 발생했습니다: {e}")
 
 # 빠른 주문 실행
-order_module = OrderModule(claude)
+order_module = OrderModule(gpt4o)
 
 # 메인 실행 부분
 if __name__ == "__main__":
