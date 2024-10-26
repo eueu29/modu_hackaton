@@ -1,0 +1,5 @@
+langchain==0.3.4
+langchain_anthropic==0.2.3
+langchain_community==0.3.3
+langchain_openai==0.2.3
+langchain_upstage==0.3.0
