@@ -240,6 +240,8 @@ class RecommendModule:
 
 # 주문 모듈 클래스
 class OrderModule: 
+    ai_message = []
+    
     def __init__(self, model):
         self.memory = self.get_shared_memory()  # 공유 메모리 생성
         self.window_memory = self.get_shared_window_memory()
@@ -277,6 +279,8 @@ class OrderModule:
     def handle_additional_requests(self):
         while True:
             print("add_req")
+            OrderModule.ai_message.append(ai_reply)
+            print(f"Updated Ordermodule.ai_message : {OrderModule.ai_message}")
             user_message = input("추가 주문이나 다른 요청이 있으신가요?").strip()
             
             intent = self.intent_chain.additional_invoke(user_message)
@@ -287,20 +291,21 @@ class OrderModule:
                 self.recommend_module.memory.clear()
                 self.execute_additional_order(user_message)  # 추가 주문 처리
             elif intent == "결제":
-                cart_menu = ShoppingCart.print_order()
-                print(cart_menu['message']) #이 값을 서버로 가져가시면 됩니다.
-                print("결제를 도와드리겠습니다")
+                OrderModule.ai_message.append(ShoppingCart.print_order())
+                print(ai_message['message']) #이 값을 서버로 가져가시면 됩니다.
+                OrderModule.ai_message.append({"전송":True, "message":"결제 도와드리겠습니다."})
                 # 결제 로직 추가 필요
                 break
             elif intent == "종료":
-                print("주문을 종료합니다. 다음에 또 뵙겠습니다 고객님.")
+                OrderModule.ai_message.append({"전송":True, "message":"프로그램이 종료됩니다."})
                 break
             else:
                 print("죄송합니다. 요청을 이해하지 못했습니다.")
     
     def execute_order(self, user_message):
+        OrderModule.ai_message = []
         try:
-            self.recommend_module.memory.clear()
+        #     self.recommend_module.memory.clear()
 
             while True:
                 print("first_req")
@@ -314,6 +319,9 @@ class OrderModule:
                 ai_reply = extracted_json['message']  ##### AI 응답
                 self.save_context({"input": user_message}, {"output": ai_reply})
                 print(f"AI : {ai_reply}")
+                
+                OrderModule.ai_message = ai_reply
+                print(f"Updated Ordermodule.ai_message : {OrderModule.ai_message}")
 
                 if extracted_json['completion']:
                     rec_order = extracted_json['order']
@@ -323,7 +331,7 @@ class OrderModule:
                     self.handle_additional_requests()
                     break
                 else: 
-                    user_message = input("입력 : ")
+                    break
                     
         except Exception as e:
             print(f"오류가 발생했습니다: {e}")
@@ -339,6 +347,9 @@ class OrderModule:
                 ai_reply = extracted_json['message']
                 self.save_context({"input": user_message}, {"output": ai_reply})
                 print(f"AI : {ai_reply}")
+                
+                OrderModule.ai_message = ai_reply
+                print(f"Updated Ordermodule.ai_message : {OrderModule.ai_message}")
 
                 if extracted_json['completion']:
                     rec_order = extracted_json['order']
@@ -348,7 +359,7 @@ class OrderModule:
                     break
                 
                 else:
-                    user_message = input("입력: ")
+                    break
                 
         except Exception as e:
             print(f"추가 주문 처리 중 오류가 발생했습니다: {e}")
