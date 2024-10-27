@@ -71,7 +71,7 @@ class ShoppingCart:
                 order_details.append(f"'{item['name']}' {item['quantity']}개, {item['price']}원")
         
         order_string = ", ".join(order_details)
-        print(f"{order_string} 주문되어, 총 {total}원 주문되었습니다.")
+        return {"전송":True, "message": f"{order_string} 주문되어, 총 {total}원 주문되었습니다."}
 
 
 class IntentChain:
@@ -183,7 +183,7 @@ class RecommendModule:
             - 세트 메뉴는 기본으로 버거, 사이드, 음료가 포함되며, 미디엄 사이즈가 기본입니다.
             - 미디엄 사이즈 세트 메뉴 가격은 context의 'set price' 가격입니다. 해당 정보가 없으면 "죄송합니다, 세트 구성이 불가능한 항목입니다. 대신 단품으로 주문하시거나 다른 메뉴를 선택해 주세요."라고 안내하세요.
             - 라지 사이즈 세트 메뉴로의 업그레이드는 800원 추가 요금이 부과됩니다.
-            - 사이드는 기본으로 후렌치 후라이 미디엄이며, 코울슬로로만 무료 변경 가능합니다.
+            - 사이드는 기본으로 후렌치 후라이 미디엄입니다.
             - 음료는 기본으로 코카콜라 미디엄이며, 음료 변경은 [코카콜라, 코카콜라 제로, 스프라이트, 환타]중에 가능합니다.
 
             **주문 절차:**
@@ -199,7 +199,7 @@ class RecommendModule:
             **주문 결과 예시:**
             {{
                 "completion": false,  // 모든 정보가 확인되지 않은 경우 false 유지
-                "reply" : "{{llm_response}}",
+                "message" : "{{llm_response}}",
                 "order" : 
                 [
                     [
@@ -272,7 +272,7 @@ class OrderModule:
             # 문자열을 Python 리스트/딕셔너리로 변환
             return json.loads(json_str)
         except:
-            return {'completion': False, 'reply': text, 'order': []}
+            return {'completion': False, 'message': text, 'order': []}
         
     def handle_additional_requests(self):
         while True:
@@ -287,7 +287,8 @@ class OrderModule:
                 self.recommend_module.memory.clear()
                 self.execute_additional_order(user_message)  # 추가 주문 처리
             elif intent == "결제":
-                ShoppingCart.print_order()
+                cart_menu = ShoppingCart.print_order()
+                print(cart_menu['message']) #이 값을 서버로 가져가시면 됩니다.
                 print("결제를 도와드리겠습니다")
                 # 결제 로직 추가 필요
                 break
@@ -310,7 +311,7 @@ class OrderModule:
                 print(f"ai_response : {ai_response}")
                 extracted_json = self.extract_json_data(ai_response)
                 print(f"extracted_json :{extracted_json}")
-                ai_reply = extracted_json['reply']  ##### AI 응답
+                ai_reply = extracted_json['message']  ##### AI 응답
                 self.save_context({"input": user_message}, {"output": ai_reply})
                 print(f"AI : {ai_reply}")
 
@@ -321,6 +322,8 @@ class OrderModule:
                     print(ShoppingCart.cart)
                     self.handle_additional_requests()
                     break
+                else: 
+                    user_message = input("입력 : ")
                     
         except Exception as e:
             print(f"오류가 발생했습니다: {e}")
@@ -332,10 +335,8 @@ class OrderModule:
                 ai_response = response.content if hasattr(response, 'content') else response
                 print(f"ai_response : {ai_response}")
                 extracted_json = self.extract_json_data(ai_response)
-                if extracted_json is None:
-                    extracted_json = {'reply':{ai_response}}
                 print(f"extracted_json :{extracted_json}")
-                ai_reply = extracted_json['reply']
+                ai_reply = extracted_json['message']
                 self.save_context({"input": user_message}, {"output": ai_reply})
                 print(f"AI : {ai_reply}")
 
@@ -344,11 +345,10 @@ class OrderModule:
                     print(f"order_data: {rec_order}")
                     ShoppingCart.add_to_cart(rec_order)
                     print(ShoppingCart.cart)
-                    self.handle_additional_requests()
                     break
                 
                 else:
-                    user_message = input("입력:")
+                    user_message = input("입력: ")
                 
         except Exception as e:
             print(f"추가 주문 처리 중 오류가 발생했습니다: {e}")
@@ -359,6 +359,7 @@ order_module = OrderModule(gpt4o)
 # 메인 실행 부분
 if __name__ == "__main__":
     try:
-        order_module.execute_order()
+        user_message = input("입력 :")
+        order_module.execute_order(user_message)
     except Exception as e:
         print(f"예상치 못한 오류가 발생했습니다: {e}")
