@@ -266,17 +266,14 @@ class OrderModule:
         try:
             # 중첩된 배열과 JSON 객체를 모두 추출하는 정규식
             json_match = re.search(r'\{.*\}', text, re.DOTALL)
-            if json_match:
                 # JSON 배열만 추출해서 문자열로 반환
-                json_str = json_match.group(0)
-                
-                # 문자열을 Python 리스트/딕셔너리로 변환
-                return json.loads(json_str)
-            else:
-                return None
-        except :
-            return None
-    
+            json_str = json_match.group(0)
+            
+            # 문자열을 Python 리스트/딕셔너리로 변환
+            return json.loads(json_str)
+        except:
+            return {'completion': False, 'reply': text, 'order': []}
+        
     def handle_additional_requests(self):
         while True:
             print("add_req")
@@ -300,16 +297,12 @@ class OrderModule:
             else:
                 print("죄송합니다. 요청을 이해하지 못했습니다.")
     
-    def execute_order(self):
+    def execute_order(self, user_message):
         try:
             self.recommend_module.memory.clear()
 
             while True:
                 print("first_req")
-                user_message = input("입력: ").strip()
-
-                if not user_message:
-                    continue
 
                 response = self.recommend_module.invoke(user_message)
                 # JSON 데이터만 추출
