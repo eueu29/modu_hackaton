@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify, send_from_directory
 from model import OrderModule, gpt4o
 from flask_cors import CORS
+import json
 
 app = Flask(__name__, static_folder='static')
 CORS(app)
@@ -30,11 +31,22 @@ def chat():
         if not user_message:
             return jsonify({"error": "메시지가 없습니다"}), 400
             
-        # response는 message와 order를 포함하는 dict를 json으로 직렬화한 문자열
         response = order_module.handle_prompt(user_message)
+        parsed_response = json.loads(response)
+        message = parsed_response["message"]
+        print(f"message:{message}")
+        order_finish = parsed_response["order_finish"]
+        print(f"order_finish:{order_finish}")
+        order = parsed_response["order"]
+        print(f"order:{order}")
+        cart_summary = parsed_response["cart_summary"]
+        print(f"cart_summary:{cart_summary}")
 
         return jsonify({
-            "response": response
+            "message": message,
+            "order_finish": order_finish,
+            "order": order,
+            "cart_summary": cart_summary
         })
         
     except Exception as e:

@@ -60,7 +60,7 @@ class OrderResponse(BaseModel):
     """
     completion: bool = Field(
         description="주문에 필요한 모든 정보(메뉴, 구성, 수량 등)가 있으면 true, 아니면 false")
-    extra : bool = Field(
+    order_finish : bool = Field(
         description="사용자가 추가주문 의사가 없다고 표현하면 true, 아니면 false"
     )
     message: str = Field(description="에이전트가 사용자에게 주문 요청에 대한 답변 메시지") 
@@ -93,7 +93,7 @@ class ShoppingCart:
             item_price = order.price
 
             template = """
-            {type} 으로 {names} {quantity}개, {price}원
+            {type} : {names} {quantity}개, {price}원
             """.strip()
             
             order_details.append(
@@ -107,7 +107,24 @@ class ShoppingCart:
         order_string = "\n=====\n".join(order_details)
         return f"[주문항목]\n=====\n{order_string}\n\n[총 금액]\n\n{total_price}원"
 
+    def send_order_menus(self) -> list:
+        order_menus: List[str] = []
+        
+        for order in self.cart:
+            if isinstance(order, OrderSetItem):
+                names = [item.name for item in order.items]
+                isSet = True
+            else:
+                names = [order.name]
+                isSet = False
+            item_quantity = order.quantity
+            item_price = order.price
 
+            menu = {"set": isSet, "menu":names, "quantity": item_quantity, "price":item_price}
+            order_menus.append(menu)
+
+        return order_menus
+    
 class RecommendModule:
     def __init__(self, model, chat_history):
         self.model = model
@@ -149,7 +166,8 @@ class RecommendModule:
             )
             for obj in json.load(open(file_dir, "r", encoding="utf-8"))
         ]
-        text_splitter = CharacterTextSplitter(separator="\n\n", chunk_size=100, chunk_overlap=0)
+        
+        text_splitter = CharacterTextSplitter(separator="\n\n", chunk_size=200, chunk_overlap=0)
         split_docs = text_splitter.split_documents(docs)
 
         embeddings = UpstageEmbeddings(model="solar-embedding-1-large")
@@ -159,8 +177,10 @@ class RecommendModule:
             document_embedding_cache=cache_dir,
             namespace="solar-embedding-1-large",
         )
+        
         vectorstore = FAISS.from_documents(split_docs, cached_embedder)
-        faiss = vectorstore.as_retriever(search_kwargs={"k": 4})
+        
+        faiss = vectorstore.as_retriever(search_kwargs={"k": 3})
 
         bm25 = BM25Retriever.from_documents(split_docs)
         bm25.k = 2
@@ -248,36 +268,35 @@ class OrderModule:
             # LLM 응답 받기
             order_response: OrderResponse = self.recommend_module.invoke(user_query)
             print(f"LLM 응답 성공: {order_response}")
-            # print(f"order_response.order:{order_response.order[-1]}")
             
             # 카트에 추가
-            if order_response.extra:
+            if order_response.order_finish:  # 주문 정보가 완성되었을 때만 카트에 추가
                 self.cart.add_to_cart(order_response.order)
                 print("카트 추가 성공")
-                print(f"cart: {self.cart.cart}")
+                print(f"cart 내역: {self.cart.cart}")
             
             # 대화 기록 추가
             self.chat_history.add_user_message(user_query)
             self.chat_history.add_ai_message(order_response.message)
+            print("대화 기록 추가 성공")
 
             # 응답 데이터 구성
             response_data = {
                 "message": order_response.message,
-                # "order": order_response.order,
+                "order_finish": order_response.order_finish,
+                "order": self.cart.send_order_menus() if self.cart.cart else [],
+                "cart_summary": self.cart.get_order_message() if self.cart.cart else ""
             }
-
-            # JSON 응답 반환
-            # return json.dumps(response_data["message"], ensure_ascii=False)
+            print(response_data)
             return json.dumps(response_data, ensure_ascii=False)
             
         except Exception as e:
             print(f"오류 발생: {e}")
-            # 오류 발생시 기본 응답
             fallback_response = {
-                "completion": False,
-                "payment" : False,
                 "message": "죄송합니다. 주문 처리 중 문제가 발생했습니다. 다시 말씀해 주시겠어요?",
-                # "order": ""
+                "order_finish": False,
+                "order": [],
+                "cart_summary": ""
             }
-            return json.dumps(fallback_response["message"], ensure_ascii=False)
+            return json.dumps(fallback_response, ensure_ascii=False)
 
