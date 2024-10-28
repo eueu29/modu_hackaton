@@ -58,16 +58,13 @@ class OrderResponse(BaseModel):
     """
     에이전트가 사용자 요청에 따라 채운 주문 정보
     """
-
     completion: bool = Field(
-        
-        description="현재까지 사용자 요청에 있는 정보로 주문 정보(품목, 구성, 수량)가 충족되어 주문 가능한 상태면 true, 아니면 false")
-    # order : bool = Field(
-    #     description="사용자가 주문을 하겠다는 의사가 있으면 true, 아니면 false"
-    # )
-    message: str = Field(description="에이전트가 사용자에게 주문 요청에 대한 답변 메시지")
-    order: List[OrderItem] = Field(description="사용자의 요청에 따라 만든 주문 목록, 품목은 세트 혹은 단품 상품이 복합적으로 여러개 존재할 수 있음")
-
+        description="주문에 필요한 모든 정보(메뉴, 구성, 수량 등)가 있으면 true, 아니면 false")
+    extra : bool = Field(
+        description="사용자가 추가주문 의사가 없다고 표현하면 true, 아니면 false"
+    )
+    message: str = Field(description="에이전트가 사용자에게 주문 요청에 대한 답변 메시지") 
+    order: List[OrderItem] = Field(description="사용자의 요청에 따라 만든 주문 목록, 품목은     세트 혹은 단품 상품이 복합적으로 여러개 존재할 수 있음")
 
 class ShoppingCart:
     def __init__(self):
@@ -85,17 +82,19 @@ class ShoppingCart:
         order_details: List[str] = []
         
         for order in self.cart:
-            names = [item.name for item in order.items] if order is OrderSetItem else [order.name]
-            item_type = "세트" if order is OrderSetItem else "단품"
+            if isinstance(order, OrderSetItem):
+                names = [item.name for item in order.items]
+                item_type = "세트"
+            else:
+                names = [order.name]
+                item_type = "단품"
             item_name = ", ".join(names)
             item_quantity = order.quantity
             item_price = order.price
 
             template = """
-            {type} 유형으로
-            {names}를
-            {quantity}개를
-            {price}원""".strip()
+            {type} 으로 {names} {quantity}개, {price}원
+            """.strip()
             
             order_details.append(
                 template.format(
@@ -190,6 +189,7 @@ class RecommendModule:
                     
                     **주문 조건:**
                     - 세트여부, 세트구성, 수량에 대한 정보가 모두 확인되면 주문완료 처리 하세요
+                    - 주문이 완료되면 사용자에게 추가주문 여부를 확인 하세요
                     - 메뉴에 세트가격에 대한 정보가 없을 경우 단품으로 구분됩니다.
                     - 세트 메뉴 구성은 버거, 후렌치후라이, 음료가 반드시 포함되며, 미디엄 사이즈가 기본입니다.
                     - 세트 메뉴의 후렌치후라이와 음료는 동일한 사이즈로만 제공됩니다.
@@ -243,31 +243,28 @@ class OrderModule:
         self.chat_history = ChatMessageHistory()
         self.recommend_module = RecommendModule(model, self.chat_history)
     
-    
     def handle_prompt(self, user_query: str) -> str:
         try:
             # LLM 응답 받기
             order_response: OrderResponse = self.recommend_module.invoke(user_query)
             print(f"LLM 응답 성공: {order_response}")
+            # print(f"order_response.order:{order_response.order[-1]}")
             
             # 카트에 추가
-            if order_response.order:
+            if order_response.extra:
                 self.cart.add_to_cart(order_response.order)
                 print("카트 추가 성공")
-                print(f"cart 내역 : {self.cart.cart}")
+                print(f"cart: {self.cart.cart}")
             
             # 대화 기록 추가
             self.chat_history.add_user_message(user_query)
             self.chat_history.add_ai_message(order_response.message)
-            print("대화 기록 추가 성공")
 
             # 응답 데이터 구성
             response_data = {
-                "completion": order_response.completion,
                 "message": order_response.message,
+                # "order": order_response.order,
             }
-            print(f"응답 데이터 구성: {response_data}")
-            print(self.cart.cart)
 
             # JSON 응답 반환
             # return json.dumps(response_data["message"], ensure_ascii=False)
@@ -278,6 +275,7 @@ class OrderModule:
             # 오류 발생시 기본 응답
             fallback_response = {
                 "completion": False,
+                "payment" : False,
                 "message": "죄송합니다. 주문 처리 중 문제가 발생했습니다. 다시 말씀해 주시겠어요?",
                 # "order": ""
             }
