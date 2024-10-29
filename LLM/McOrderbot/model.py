@@ -61,7 +61,7 @@ class OrderResponse(BaseModel):
     completion: bool = Field(
         description="주문에 필요한 모든 정보(메뉴, 구성, 수량 등)가 있으면 true, 아니면 false")
     order_finish : bool = Field(
-        description="사용자가 추가주문 의사가 없다고 표현하면 true, 아니면 false"
+        description="사용자가 추가문 의사가 없다고 표현하면 true, 아니면 false"
     )
     message: str = Field(description="에이전트가 사용자에게 주문 요청에 대한 답변 메시지") 
     order: List[OrderItem] = Field(description="사용자의 요청에 따라 만든 주문 목록, 품목은     세트 혹은 단품 상품이 복합적으로 여러개 존재할 수 있음")
@@ -266,11 +266,40 @@ class OrderModule:
     def handle_prompt(self, user_query: str) -> str:
         try:
             # LLM 응답 받기
-            order_response: OrderResponse = self.recommend_module.invoke(user_query)
-            print(f"LLM 응답 성공: {order_response}")
-            
+            try:
+                order_response: OrderResponse = self.recommend_module.invoke(user_query)
+                print(f"LLM 응답 성공: {order_response}")
+            except Exception as llm_error:
+                print(f"LLM 응답 처리 중 오류: {llm_error}")
+                
+                # LLM 응답에서 텍스트 추출
+                llm_text = ""
+                if hasattr(llm_error, 'args') and len(llm_error.args) > 0:
+                    error_data = llm_error.args[0]
+                    if isinstance(error_data, dict):
+                        # generations에서 text 추출 시도
+                        if 'generations' in error_data and len(error_data['generations']) > 0:
+                            gen = error_data['generations'][0][0]
+                            if 'text' in gen:
+                                llm_text = gen['text']
+                            # text가 없을 경우 message.kwargs.content에서 추출 시도
+                            elif 'message' in gen and 'kwargs' in gen['message']:
+                                llm_text = gen['message']['kwargs'].get('content', '')
+                
+                # 추출된 텍스트가 없으면 에러 메시지 사용
+                if not llm_text:
+                    llm_text = str(llm_error)
+                
+                # OrderResponse 형식으로 변환
+                order_response = OrderResponse(
+                    completion=False,
+                    order_finish=False,
+                    message=llm_text,
+                    order=[]
+                )
+                
             # 카트에 추가
-            if order_response.order_finish:  # 주문 정보가 완성되었을 때만 카트에 추가
+            if order_response.order_finish:
                 self.cart.add_to_cart(order_response.order)
                 print("카트 추가 성공")
                 print(f"cart 내역: {self.cart.cart}")
